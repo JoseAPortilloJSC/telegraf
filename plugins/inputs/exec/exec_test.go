@@ -50,7 +50,7 @@ type runnerMock struct {
 	err    error
 }
 
-func (r runnerMock) run(string) (out, errout []byte, err error) {
+func (r runnerMock) run(string, []string) (out, errout []byte, err error) {
 	return r.out, r.errout, r.err
 }
 
@@ -463,6 +463,40 @@ T! very detailed details
 			require.ElementsMatch(t, tt.expected, logger.Messages())
 		})
 	}
+}
+
+func TestExecArrayBasedSingleCommand(t *testing.T) {
+	// Setup parser
+	parser := value.Parser{
+		MetricName: "metric",
+		DataType:   "string",
+	}
+	require.NoError(t, parser.Init())
+
+	// Setup plugin
+	plugin := &Exec{
+		Command: []string{"/bin/sh", "-c", "'echo metric_value'"},
+		Timeout: config.Duration(5 * time.Second),
+		Log:     testutil.Logger{},
+	}
+	plugin.SetParser(&parser)
+	require.NoError(t, plugin.Init())
+
+	// Gather the metrics and check the result
+	var acc testutil.Accumulator
+	require.NoError(t, acc.GatherError(plugin.Gather))
+
+	expected := []telegraf.Metric{
+		metric.New(
+			"metric",
+			map[string]string{},
+			map[string]interface{}{
+				"value": "metric_value",
+			},
+			time.Unix(0, 0),
+		),
+	}
+	testutil.RequireMetricsEqual(t, expected, acc.GetTelegrafMetrics(), testutil.IgnoreTime())
 }
 
 func TestTruncate(t *testing.T) {
