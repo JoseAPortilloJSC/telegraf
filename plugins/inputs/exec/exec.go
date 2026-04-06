@@ -5,8 +5,10 @@ import (
 	"bufio"
 	"bytes"
 	_ "embed"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/plugins/inputs"
 	"github.com/influxdata/telegraf/plugins/parsers/nagios"
+	"github.com/kballard/go-shellquote"
 )
 
 //go:embed sample.conf
@@ -28,7 +31,7 @@ const maxStderrBytes int = 512
 
 type Exec struct {
 	Commands    []string        `toml:"commands"`
-	Command     []string        `toml:"command"`
+	Command     interface{}     `toml:"command"` // legacy: string, now. []srting
 	Environment []string        `toml:"environment"`
 	IgnoreError bool            `toml:"ignore_error"`
 	LogStdErr   bool            `toml:"log_stderr"`
@@ -47,7 +50,12 @@ type Exec struct {
 type exitCodeHandlerFunc func([]telegraf.Metric, error, []byte) []telegraf.Metric
 
 type runner interface {
-	run(string, []string) ([]byte, []byte, error)
+	run([]string) ([]byte, []byte, error)
+}
+
+type cmdSpec struct {
+	args []string // pre-split, ready for exec.Command
+	name string   // for error messages
 }
 
 type commandRunner struct {
@@ -61,6 +69,43 @@ func (*Exec) SampleConfig() string {
 }
 
 func (e *Exec) Init() error {
+	switch v := e.Command.(type) {
+	case string:
+		// Legacy single string command. Later processed by shellquote.Split
+		//e.Log.Warn("Specifying 'command' as 'string' is deprecated since v1.38.0 and will be removed in v1.45.0. " +
+		//	"Please convert your command into a list with each parameter being an own entry.")
+		config.PrintOptionValueDeprecationNotice("inputs.exec", "command", false, telegraf.DeprecationInfo{
+			Since:     "1.38.0",
+			RemovalIn: "1.45.0",
+			Notice:    "Use array syntax instead: [\"/bin/sh\", \"-c\", \"echo metric_value\"]",
+		})
+		if len(strings.TrimSpace(e.Command.(string))) == 0 {
+			return errors.New("Command string cannot be empty")
+		}
+	case []interface{}:
+		// New []string command. TOML might parse arrays as []interface{}
+		for i, value := range v {
+			if reflect.TypeOf(value).Kind() != reflect.String {
+				return fmt.Errorf("Command array index `%d' contains non-string value in array: %v (type: %T)", i, value, value)
+			}
+			if len(strings.TrimSpace(value.(string))) == 0 {
+				return fmt.Errorf("Command array index `%d' cannot be empty", i)
+			}
+		}
+		if len(e.Command.([]string)) == 0 {
+			return errors.New("Command array cannot be empty")
+		}
+		// if there was only one argument, and it contained spaces, warn the user
+		// that they may have configured it wrong.
+		if len(e.Command.([]string)) == 1 && strings.Contains(e.Command.([]string)[0], " ") {
+			e.Log.Warn("The inputs.exec Command contained spaces but no arguments. " +
+				"This setting expects the program and arguments as an array of strings, " +
+				"not as a space-delimited string. See the plugin readme for an example.")
+		}
+	default:
+		return fmt.Errorf("Command has invalid type %T, expected string or []string", e.Command)
+	}
+
 	e.runner = &commandRunner{
 		environment: e.Environment,
 		timeout:     time.Duration(e.Timeout),
@@ -84,26 +129,37 @@ func (e *Exec) SetParser(parser telegraf.Parser) {
 }
 
 func (e *Exec) Gather(acc telegraf.Accumulator) error {
-	commands := e.updateRunners()
+	cmdSpecs := []cmdSpec{}
 
-	var wg sync.WaitGroup
 	// Shell-like string-based commands support
-	for _, cmd := range commands {
-		wg.Add(1)
-
-		go func(c string) {
-			defer wg.Done()
-			acc.AddError(e.processCommand(acc, c, nil))
-		}(cmd)
+	for _, cmd := range e.updateRunners() {
+		// Shell-like string-based command support
+		splitCmd, err := shellquote.Split(cmd)
+		if err != nil || len(splitCmd) == 0 {
+			e.Log.Errorf("exec: unable to parse command %q: %w", cmd, err)
+			continue
+		}
+		cmdSpecs = append(cmdSpecs, cmdSpec{
+			args: splitCmd,
+			name: cmd,
+		})
 	}
 	// Array-based single command support
-	if len(e.Command) != 0 {
+	if splitCmd, ok := e.Command.([]string); ok {
+		cmdSpecs = append(cmdSpecs, cmdSpec{
+			args: splitCmd,
+			name: strings.Join(splitCmd, " "),
+		})
+	}
+
+	var wg sync.WaitGroup
+	for _, cmdSpec := range cmdSpecs {
 		wg.Add(1)
 
-		go func(c []string) {
+		go func(c cmdSpec) {
 			defer wg.Done()
-			acc.AddError(e.processCommand(acc, "", c))
-		}(e.Command)
+			acc.AddError(e.processCommand(acc, c))
+		}(cmdSpec)
 	}
 	wg.Wait()
 	return nil
@@ -143,10 +199,10 @@ func (e *Exec) updateRunners() []string {
 	return commands
 }
 
-func (e *Exec) processCommand(acc telegraf.Accumulator, cmd string, splitCmd []string) error {
-	out, errBuf, runErr := e.runner.run(cmd, splitCmd)
+func (e *Exec) processCommand(acc telegraf.Accumulator, cmdspec cmdSpec) error {
+	out, errBuf, runErr := e.runner.run(cmdspec.args)
 	if !e.IgnoreError && !e.parseDespiteError && runErr != nil {
-		return fmt.Errorf("exec: %w for command %q: %s", runErr, cmd, string(errBuf))
+		return fmt.Errorf("exec: %w for command %q: %s", runErr, cmdspec.name, string(errBuf))
 	}
 
 	// Log output in stderr

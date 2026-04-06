@@ -50,7 +50,7 @@ type runnerMock struct {
 	err    error
 }
 
-func (r runnerMock) run(string, []string) (out, errout []byte, err error) {
+func (r runnerMock) run([]string) (out, errout []byte, err error) {
 	return r.out, r.errout, r.err
 }
 
@@ -632,6 +632,86 @@ func TestCases(t *testing.T) {
 	require.NoError(t, cfg.LoadConfigData([]byte(`
 	[[inputs.exec]]
 	commands = [ "echo \"a,b\n1,2\n3,4\"" ]
+	data_format = "csv"
+	csv_header_row_count = 1
+`), config.EmptySourcePath))
+	require.Len(t, cfg.Inputs, 1)
+	plugin := cfg.Inputs[0]
+	require.NoError(t, plugin.Init())
+
+	expected := []telegraf.Metric{
+		metric.New(
+			"exec",
+			map[string]string{},
+			map[string]interface{}{
+				"a": int64(1),
+				"b": int64(2),
+			},
+			time.Unix(0, 1),
+		),
+		metric.New(
+			"exec",
+			map[string]string{},
+			map[string]interface{}{
+				"a": int64(3),
+				"b": int64(4),
+			},
+			time.Unix(0, 2),
+		),
+		metric.New(
+			"exec",
+			map[string]string{},
+			map[string]interface{}{
+				"a": int64(1),
+				"b": int64(2),
+			},
+			time.Unix(0, 3),
+		),
+		metric.New(
+			"exec",
+			map[string]string{},
+			map[string]interface{}{
+				"a": int64(3),
+				"b": int64(4),
+			},
+			time.Unix(0, 4),
+		),
+	}
+
+	var acc testutil.Accumulator
+	// Run gather once
+	require.NoError(t, plugin.Gather(&acc))
+	// Run gather a second time
+	require.NoError(t, plugin.Gather(&acc))
+	require.Eventuallyf(t, func() bool {
+		acc.Lock()
+		defer acc.Unlock()
+		return acc.NMetrics() >= uint64(len(expected))
+	}, time.Second, 100*time.Millisecond, "Expected %d metrics found %d", len(expected), acc.NMetrics())
+
+	// Check the result
+	options := []cmp.Option{
+		testutil.SortMetrics(),
+		testutil.IgnoreTime(),
+	}
+	actual := acc.GetTelegrafMetrics()
+	testutil.RequireMetricsEqual(t, expected, actual, options...)
+}
+
+func TestCasesArrayBasedSingleCommand(t *testing.T) {
+	// Register the plugin
+	inputs.Add("exec", func() telegraf.Input {
+		return &Exec{
+			Timeout: config.Duration(5 * time.Second),
+			Log:     testutil.Logger{},
+		}
+	})
+
+	// Setup the plugin
+	cfg := config.NewConfig()
+	require.NoError(t, cfg.LoadConfigData([]byte(`
+	[[inputs.exec]]
+	command = [ "echo", "a,b\n1,2\n3,4" ]
 	data_format = "csv"
 	csv_header_row_count = 1
 `), config.EmptySourcePath))
