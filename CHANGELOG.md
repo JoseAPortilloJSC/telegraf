@@ -57,7 +57,7 @@
 
 ### BREAKING CHANGES
 
-- [#17913] (https://github.com/influxdata/telegraf/issues/17913) `inputs.exec` Changed the 'command' setting type to []string. This is a change from previous versions where it was of plain string type. This might break clients relying on the string 'command' setting. You can manually move any existing 'command' setting into an item in the 'commands' array setting.
+- [#17913](https://github.com/influxdata/telegraf/issues/17913) `inputs.exec` Changed the 'command' setting type to []string. This is a change from previous versions where it was of plain string type. This might break clients relying on the string 'command' setting. You can manually move any existing 'command' setting into an item in the 'commands' array setting.
 
 ## v1.38.1 [2026-03-16]
 
