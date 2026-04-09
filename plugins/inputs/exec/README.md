@@ -23,14 +23,11 @@ plugin ordering. See [CONFIGURATION.md][CONFIGURATION.md] for more details.
 ```toml @sample.conf
 # Read metrics from one or more commands that can output to stdout
 [[inputs.exec]]
-  ## Array-based single command
-  ## NOTE: process and each argument should each be their own string
-  ## NOTE: TOML single-quoted literal string allows for unescaped Windows paths
-  ## e.g. ['C:\Windows\System32\w32tm.exe', "/stripchart", "/computer:SERVER1", "/dataonly", "/samples:3"]
-  ## e.g. ["/bin/sh", "-c", "echo metric_value"]
-  # command = []
-
-  ## String-based commands array
+  ## Commands array with each command being and array of the command and its
+  ## flags, e.g.
+  ##   commands = [['C:\Windows\System32\w32tm.exe', "/stripchart", "/computer:SERVER1", "/dataonly", "/samples:3"]]
+  ## or
+  ##   commands = [["echo", "value 1"], ["echo", "value 2"]]
   commands = []
 
   ## Environment variables
