@@ -51,14 +51,6 @@
 - [#18536](https://github.com/influxdata/telegraf/pull/18536) `deps` Bump the aws-sdk-go-v2 group with 11 updates
 - [#18588](https://github.com/influxdata/telegraf/pull/18588) `deps` Bump the aws-sdk-go-v2 group with 4 updates
 
-### Features
-
-- [#17913](https://github.com/influxdata/telegraf/issues/17913) `inputs.exec` Add support for Array-based single command as in inputs.execd, outputs.exec, outputs.execd
-
-### BREAKING CHANGES
-
-- [#17913](https://github.com/influxdata/telegraf/issues/17913) `inputs.exec` Changed the 'command' setting type to []string. This is a change from previous versions where it was of plain string type. This might break clients relying on the string 'command' setting. You can manually move any existing 'command' setting into an item in the 'commands' array setting.
-
 ## v1.38.1 [2026-03-16]
 
 ### Bugfixes
