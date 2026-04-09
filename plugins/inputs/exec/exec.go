@@ -30,8 +30,8 @@ var once sync.Once
 const maxStderrBytes int = 512
 
 type Exec struct {
-	Commands    []string        `toml:"commands"`
-	Command     interface{}     `toml:"command"` // legacy: string, now: []string
+	Commands    []interface{}   `toml:"commands"`
+	Command     string          `toml:"command"`
 	Environment []string        `toml:"environment"`
 	IgnoreError bool            `toml:"ignore_error"`
 	LogStdErr   bool            `toml:"log_stderr"`
@@ -41,6 +41,7 @@ type Exec struct {
 	parser telegraf.Parser
 
 	runner runner
+	cmds   [][]string
 
 	// Allow post-processing of command exit codes
 	exitCodeHandler   exitCodeHandlerFunc
@@ -51,11 +52,6 @@ type exitCodeHandlerFunc func([]telegraf.Metric, error, []byte) []telegraf.Metri
 
 type runner interface {
 	run([]string) ([]byte, []byte, error)
-}
-
-type cmdSpec struct {
-	args []string // pre-split, ready for exec.Command
-	name string   // for error messages
 }
 
 type commandRunner struct {
@@ -69,43 +65,62 @@ func (*Exec) SampleConfig() string {
 }
 
 func (e *Exec) Init() error {
-	switch v := e.Command.(type) {
-	case string:
-		// Legacy single string command setting
-		if v == "" {
-			return errors.New("command string cannot be empty")
+	// Legacy single command support
+	if e.Command != "" {
+		e.Commands = append(e.Commands, e.Command)
+	}
+
+	if len(e.Commands) == 0 {
+		return errors.New("no command specified")
+	}
+
+	e.cmds = make([][]string, 0, len(e.Commands))
+	for _, raw := range e.Commands {
+		switch c := raw.(type) {
+		case string:
+			// Legacy single string command setting
+			if c == "" {
+				return errors.New("command string cannot be empty")
+			}
+
+			// Convert the legacy command string to a string list and output
+			// deprecation notice
+			cmd, err := shellquote.Split(c)
+			if err != nil || len(cmd) == 0 {
+				return fmt.Errorf("unable to parse command %q: %w", c, err)
+			}
+			if len(cmd) == 0 {
+				return errors.New("command cannot be empty")
+			}
+			config.PrintOptionValueDeprecationNotice("inputs.exec", "command", c, telegraf.DeprecationInfo{
+				Since:     "1.38.0",
+				RemovalIn: "1.45.0",
+				Notice:    fmt.Sprintf("Use array syntax instead: %v", cmd),
+			})
+			e.cmds = append(e.cmds, cmd)
+		case []string:
+			if len(c) == 0 {
+				return errors.New("command cannot be empty")
+			}
+			e.cmds = append(e.cmds, c)
+		case []interface{}:
+			if len(c) == 0 {
+				return errors.New("command cannot be empty")
+			}
+
+			// Convert the entries to a string list
+			converted := make([]string, 0, len(c))
+			for _, r := range c {
+				v, ok := r.(string)
+				if !ok {
+					return fmt.Errorf("command %v has invalid entry %v of type %T, expected string", raw, r, r)
+				}
+				converted = append(converted, v)
+			}
+			e.cmds = append(e.cmds, converted)
+		default:
+			return fmt.Errorf("command %v has invalid type %T, expected string list", raw, raw)
 		}
-		config.PrintOptionValueDeprecationNotice("inputs.exec", "command", v, telegraf.DeprecationInfo{
-			Since:     "1.38.0",
-			RemovalIn: "1.45.0",
-			Notice:    "Use array syntax instead: [\"/bin/sh\", \"-c\", \"echo metric_value\"]",
-		})
-		// Move to 'commands' for shellquote.Split processing
-		e.Commands = append(e.Commands, v)
-		e.Command = nil
-	case []interface{}:
-		// New []string command seting. TOML might parse arrays as []interface{}
-		if len(v) == 0 {
-			return errors.New("command array cannot be empty")
-		}
-		// Check first item type (TOML parser ensures all array items are the same type)
-		if _, ok := v[0].(string); !ok {
-			return fmt.Errorf("command array items have invalid type %T, expected string", v[0])
-		}
-		// if there was only one argument, and it contained spaces, warn the user
-		// that they may have configured it wrong.
-		if len(v) == 1 && strings.Contains(v[0].(string), " ") {
-			e.Log.Warn("The inputs.exec Command contained spaces but no arguments. " +
-				"This setting expects the program and arguments as an array of strings, " +
-				"not as a space-delimited string. See the plugin readme for an example.")
-			// Move to 'commands' for shellquote.Split processing
-			e.Commands = append(e.Commands, v[0].(string))
-			e.Command = nil
-		}
-	case nil:
-		// No command setting provided
-	default:
-		return fmt.Errorf("command has invalid type %T, expected string or []string", e.Command)
 	}
 
 	e.runner = &commandRunner{
@@ -131,38 +146,12 @@ func (e *Exec) SetParser(parser telegraf.Parser) {
 }
 
 func (e *Exec) Gather(acc telegraf.Accumulator) error {
-	cmdSpecs := make([]cmdSpec, 0, len(e.Commands)+1)
-
-	// Shell-like string-based commands support
 	commands := e.updateRunners()
-	for _, cmd := range commands {
-		splitCmd, err := shellquote.Split(cmd)
-		if err != nil || len(splitCmd) == 0 {
-			e.Log.Errorf("exec: unable to parse command %q: %v", cmd, err)
-			continue
-		}
-		cmdSpecs = append(cmdSpecs, cmdSpec{
-			args: splitCmd,
-			name: cmd,
-		})
-	}
-	// Array-based single command support
-	if cmd, ok := e.Command.([]interface{}); ok {
-		splitCmd := make([]string, len(cmd))
-		for i, v := range cmd {
-			splitCmd[i] = v.(string)
-		}
-		cmdSpecs = append(cmdSpecs, cmdSpec{
-			args: splitCmd,
-			name: strings.Join(splitCmd, " "),
-		})
-	}
 
 	var wg sync.WaitGroup
-	for _, item := range cmdSpecs {
+	for _, item := range commands {
 		wg.Add(1)
-
-		go func(c cmdSpec) {
+		go func(c []string) {
 			defer wg.Done()
 			acc.AddError(e.processCommand(acc, c))
 		}(item)
@@ -171,33 +160,28 @@ func (e *Exec) Gather(acc telegraf.Accumulator) error {
 	return nil
 }
 
-func (e *Exec) updateRunners() []string {
-	commands := make([]string, 0, len(e.Commands))
-	for _, pattern := range e.Commands {
-		if pattern == "" {
-			continue
-		}
-
+func (e *Exec) updateRunners() [][]string {
+	commands := make([][]string, 0, len(e.cmds))
+	for _, cmd := range e.cmds {
 		// Try to expand globbing expressions
-		cmd, args, found := strings.Cut(pattern, " ")
-		matches, err := filepath.Glob(cmd)
+		matches, err := filepath.Glob(cmd[0])
 		if err != nil {
-			e.Log.Errorf("Matching command %q failed: %v", cmd, err)
+			e.Log.Errorf("Matching command %q failed: %v", cmd[0], err)
 			continue
 		}
 
 		if len(matches) == 0 {
 			// There were no matches with the glob pattern, so let's assume
 			// the command is in PATH and just run it as it is
-			commands = append(commands, pattern)
+			commands = append(commands, cmd)
 		} else {
 			// There were matches, so we'll append each match together with
 			// the arguments to the commands slice
 			for _, match := range matches {
-				if found {
-					match += " " + args
-				}
-				commands = append(commands, match)
+				expanded := make([]string, 0, len(cmd))
+				expanded = append(expanded, match)
+				expanded = append(expanded, cmd[1:]...)
+				commands = append(commands, expanded)
 			}
 		}
 	}
@@ -205,10 +189,10 @@ func (e *Exec) updateRunners() []string {
 	return commands
 }
 
-func (e *Exec) processCommand(acc telegraf.Accumulator, cmdspec cmdSpec) error {
-	out, errBuf, runErr := e.runner.run(cmdspec.args)
+func (e *Exec) processCommand(acc telegraf.Accumulator, cmd []string) error {
+	out, errBuf, runErr := e.runner.run(cmd)
 	if !e.IgnoreError && !e.parseDespiteError && runErr != nil {
-		return fmt.Errorf("exec: %w for command %q: %s", runErr, cmdspec.name, string(errBuf))
+		return fmt.Errorf("exec: %w for command %q: %s", runErr, strings.Join(cmd, " "), string(errBuf))
 	}
 
 	// Log output in stderr
