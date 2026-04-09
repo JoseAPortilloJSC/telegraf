@@ -12,13 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kballard/go-shellquote"
+
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/config"
 	"github.com/influxdata/telegraf/internal"
 	"github.com/influxdata/telegraf/models"
 	"github.com/influxdata/telegraf/plugins/inputs"
 	"github.com/influxdata/telegraf/plugins/parsers/nagios"
-	"github.com/kballard/go-shellquote"
 )
 
 //go:embed sample.conf
@@ -72,10 +73,8 @@ func (e *Exec) Init() error {
 	case string:
 		// Legacy single string command setting
 		if v == "" {
-			return errors.New("Command string cannot be empty")
+			return errors.New("command string cannot be empty")
 		}
-		//e.Log.Warn("Specifying 'command' as 'string' is deprecated since v1.38.0 and will be removed in v1.45.0. " +
-		//	"Please convert your command into a list with each parameter being an own entry.")
 		config.PrintOptionValueDeprecationNotice("inputs.exec", "command", v, telegraf.DeprecationInfo{
 			Since:     "1.38.0",
 			RemovalIn: "1.45.0",
@@ -87,11 +86,11 @@ func (e *Exec) Init() error {
 	case []interface{}:
 		// New []string command seting. TOML might parse arrays as []interface{}
 		if len(v) == 0 {
-			return errors.New("Command array cannot be empty")
+			return errors.New("command array cannot be empty")
 		}
 		// Check first item type (TOML parser ensures all array items are the same type)
 		if _, ok := v[0].(string); !ok {
-			return fmt.Errorf("Command array items have invalid type %T, expected string", v[0])
+			return fmt.Errorf("command array items have invalid type %T, expected string", v[0])
 		}
 		// if there was only one argument, and it contained spaces, warn the user
 		// that they may have configured it wrong.
@@ -106,7 +105,7 @@ func (e *Exec) Init() error {
 	case nil:
 		// No command setting provided
 	default:
-		return fmt.Errorf("Command has invalid type %T, expected string or []string", e.Command)
+		return fmt.Errorf("command has invalid type %T, expected string or []string", e.Command)
 	}
 
 	e.runner = &commandRunner{
@@ -139,7 +138,7 @@ func (e *Exec) Gather(acc telegraf.Accumulator) error {
 	for _, cmd := range commands {
 		splitCmd, err := shellquote.Split(cmd)
 		if err != nil || len(splitCmd) == 0 {
-			e.Log.Errorf("exec: unable to parse command %q: %w", cmd, err)
+			e.Log.Errorf("exec: unable to parse command %q: %v", cmd, err)
 			continue
 		}
 		cmdSpecs = append(cmdSpecs, cmdSpec{
