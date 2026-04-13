@@ -86,16 +86,21 @@ func (e *Exec) Init() error {
 			// Convert the legacy command string to a string list and output
 			// deprecation notice
 			cmd, err := shellquote.Split(c)
-			if err != nil || len(cmd) == 0 {
+			if err != nil {
 				return fmt.Errorf("unable to parse command %q: %w", c, err)
 			}
 			if len(cmd) == 0 {
 				return errors.New("command cannot be empty")
 			}
+			// Create the corresponding command in the new syntax to ease migration
+			suggestion := make([]string, 0, len(cmd))
+			for _, a := range cmd {
+				suggestion = append(suggestion, `"`+a+`"`)
+			}
 			config.PrintOptionValueDeprecationNotice("inputs.exec", "command", c, telegraf.DeprecationInfo{
-				Since:     "1.38.0",
+				Since:     "1.39.0",
 				RemovalIn: "1.45.0",
-				Notice:    fmt.Sprintf("Use array syntax instead: %v", cmd),
+				Notice:    fmt.Sprintf("Use array syntax instead: [%s]", strings.Join(suggestion, ",")),
 			})
 			e.cmds = append(e.cmds, cmd)
 		case []string:
