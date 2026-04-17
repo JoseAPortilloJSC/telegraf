@@ -229,9 +229,6 @@
 - [#18316](https://github.com/influxdata/telegraf/pull/18316) `deps` Bump the aws-sdk-go-v2 group with 2 updates
 - [#18314](https://github.com/influxdata/telegraf/pull/18314) `deps` Bump tj-actions/changed-files from 47.0.1 to 47.0.2
 - [#18372](https://github.com/influxdata/telegraf/pull/18372) `deps` Update github.com/pion/dtls from v2 to v3
-### Features
-
-- [#17913](https://github.com/influxdata/telegraf/issues/17913) `inputs.exec` Add support for Array-based single command as in inputs.execd, outputs.exec, outputs.execd
 
 ## v1.37.2 [2026-02-02]
 
