@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,7 +96,7 @@ func (e *Exec) Init() error {
 			// Create the corresponding command in the new syntax to ease migration
 			suggestion := make([]string, 0, len(cmd))
 			for _, a := range cmd {
-				suggestion = append(suggestion, `"`+a+`"`)
+				suggestion = append(suggestion, strconv.Quote(a))
 			}
 			config.PrintOptionValueDeprecationNotice("inputs.exec", "command", c, telegraf.DeprecationInfo{
 				Since:     "1.39.0",
